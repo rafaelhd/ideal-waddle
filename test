@@ -1,0 +1,151 @@
+ECHO "Installing the Oracle Java Virtual Machine"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Working directory path
+    $WORKD = "C:\AgentConfig"
+
+# Check if work directory exists if not create it
+    If (!(Test-Path -Path $WORKD -PathType Container))
+    { 
+    New-Item -Path $WORKD  -ItemType directory 
+    }
+
+#create config file for silent install
+    $TEXT = '
+    INSTALL_SILENT=Enable
+    AUTO_UPDATE=Enable
+    SPONSORS=Disable
+    REMOVEOUTOFDATEJRES=1
+    '
+    $TEXT | Set-Content "$WORKD\jreinstall.cfg"
+    
+#download executable
+    $JAVA_URL = "https://javadl.oracle.com/webapps/download/AutoDL?xd_co_f=ZTgyYTFjYWYtMmE3OS00YjllLWFhZTgtNzZmNjcxNWU3NDky&BundleId=242990_a4634525489241b9a9e1aa73d9e118e6"
+    $JAVA_DESTINATION = "$WORKD\jreInstall.exe"
+    $CLIENT = New-Object System.Net.WebClient
+    $CLIENT.DownloadFile($JAVA_URL, $JAVA_DESTINATION)
+
+#install silently
+    Start-Process -FilePath "$WORKD\jreInstall.exe" -ArgumentList INSTALLCFG="$WORKD\jreinstall.cfg"
+    Start-Sleep -s 180
+	
+ECHO "Java installation is done"
+
+# Remove the installer
+    rm -Force $WORKD\jre*
+
+ECHO "Creating User Account"
+
+    $PW = ConvertTo-SecureString -String "sshd_P@ssw0rd" -AsPlainText -Force
+    New-LocalUser -Name sshd -Password $PW -PasswordNeverExpires -AccountNeverExpires
+    Add-LocalGroupMember -Group Administrators -Member sshd
+
+ECHO "Installing cygwin"
+    Invoke-WebRequest https://cygwin.com/setup-x86_64.exe -OutFile C:\AgentConfig\setup-x86_64.exe
+    Start-Process C:\AgentConfig\setup-x86_64.exe -Wait -NoNewWindow -ArgumentList "-q -n -l C:\cygwin64\packages -s http://mirrors.kernel.org/sourceware/cygwin/ -R C:\cygwin64 -P python-devel,openssh,cygrunsrv,wget,tar,qawk,bzip2,subversion,vim,make,gcc-fortran,gcc-g++,gcc-core,make,openssl,openssl-devel,libffi-devel,libyaml-devel,git,zip,unzip,gdb,libsasl2,gettext"
+    Remove-Item C:\AgentConfig\setup-x86_64.exe
+
+ECHO "Setting Cygwin on PATH"
+    $newPath = 'C:\cygwin64\bin;\cygwin\bin;' + [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::Machine)
+    [Environment]::SetEnvironmentVariable("PATH", $newPath, [EnvironmentVariableTarget]::Machine)
+
+ECHO "Starting the CYGWIN sshd service from the Services management panel"
+    Write-Host "Start sshd service"
+    net start cygsshd
+
+ECHO "Setting up Cygwin"
+    Start-Process C:\cygwin64\bin\bash.exe -Wait -NoNewWindow -ArgumentList "C:\cygwin64\bin\ssh-host-config --yes -c '' -u sshd -w sshd_password"
+
+ECHO "Creating pub keys and adding it to authorized_keys"
+    MKDIR C:\cygwin64\home\Administrator\.ssh
+    C:\cygwin64\bin\ssh-keygen.exe -m pem -t ecdsa -f /home/Administrator/win_keys -q -N '""'
+    cd C:\cygwin64\home\Administrator\.ssh
+    C:\cygwin64\bin\cp.exe  /home/Administrator/win_keys.pub /home/Administrator/.ssh/authorized_keys
+    C:\cygwin64\bin\chmod.exe  700 /home/Administrator/.ssh
+    C:\cygwin64\bin\chmod.exe  640 /home/Administrator/.ssh/authorized_keys
+    C:\cygwin64\bin\chown.exe  -R Administrator /home/Administrator
+
+
+ECHO "Opening and configuring Windows Firewall"
+    Write-Host "Setting firewall rule"
+    netsh advfirewall firewall add rule name="ssh" dir=in action=allow protocol=TCP localport=22
+
+# Setting up tools Properties
+	$SONAR_MSBUILD_HOME = 'C:\sonar-scanner-msbuild'
+	$SONAR_MSBUILD_FILE = 'sonar-scanner-msbuild.zip'
+	$SONAR_MSBUILD_URL = 'https://github.com/SonarSource/sonar-scanner-msbuild/releases/download/4.10.0.19059/sonar-scanner-msbuild-4.10.0.19059-net46.zip'
+	$SONAR_MSBUILD_VERSION = 'sonar-scanner-4.4.0.2170'
+	$SONAR_HOME = 'C:\sonar-scanner'
+	$SONAR_FILE = 'sonar-scanner.zip'
+	$SONAR_URL = 'https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.5.0.2216-windows.zip'
+	$SONAR_VERSION = 'sonar-scanner-4.5.0.2216-windows'	
+	$MAVEN_HOME = 'C:\maven'
+	$MAVEN_FILE = 'maven.zip'
+	$MAVEN_VERSION= 'apache-maven-3.6.3'
+	$MAVEN_URL = 'https://mirror.dsrg.utoronto.ca/apache/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.zip'
+	$NODEJS_URL = 'https://nodejs.org/dist/v12.18.4/node-v12.18.4-x64.msi'
+	$NODEJS_FILE = 'node-v12.18.4-x64.msi'
+
+ECHO "Creating Sonar Scanner folder"
+    MKDIR $SONAR_MSBUILD_HOME
+	MKDIR $SONAR_HOME
+
+ECHO "Downloading Sonnar Scanner"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $SONAR_MSBUILD_URL -OutFile "$WORKD\$SONAR_MSBUILD_FILE"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $SONAR_URL -OutFile "$WORKD\$SONAR_FILE"
+
+ECHO "Extracting Sonar Scanner"
+    Add-Type -assembly "system.io.compression.filesystem"
+    [System.IO.Compression.ZipFile]::ExtractToDirectory("$WORKD\$SONAR_MSBUILD_FILE","$SONAR_MSBUILD_HOME")
+    Add-Type -assembly "system.io.compression.filesystem"
+    [System.IO.Compression.ZipFile]::ExtractToDirectory("$WORKD\$SONAR_FILE","$SONAR_HOME")
+ECHO "Adjusting Sonnar scanner Properties"
+
+    (Get-Content $SONAR_MSBUILD_HOME\$SONAR_MSBUILD_VERSION\conf\sonar-scanner.properties) -replace '#sonar.host.url=http://localhost:9000', 'sonar.host.url=https://dev.sq.nylcloud.com/sonar' | Set-Content $SONAR_MSBUILD_HOME\$SONAR_MSBUILD_VERSION\conf\sonar-scanner.properties
+	(Get-Content $SONAR_HOME\$SONAR_VERSION\conf\sonar-scanner.properties) -replace '#sonar.host.url=http://localhost:9000', 'sonar.host.url=https://dev.sq.nylcloud.com/sonar' | Set-Content $SONAR_HOME\$SONAR_VERSION\conf\sonar-scanner.properties
+
+ECHO "Creating Maven folder"
+    mkdir $MAVEN_HOME
+ECHO "Downloading Maven"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $MAVEN_URL -OutFile "$WORKD\$MAVEN_FILE"
+
+ECHO "Extracting maven"
+    Add-Type -assembly "system.io.compression.filesystem"
+    [System.IO.Compression.ZipFile]::ExtractToDirectory("$WORKD\$MAVEN_FILE","$MAVEN_HOME")
+
+ECHO "Downloading NodeJS"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $NODEJS_URL -OutFile "$WORKD\$NODEJS_FILE"
+
+ECHO "Installing NodeJS"
+    msiexec /qn /l* C:\AgentConfig\node-log.txt /i $WORKD\$NODEJS_FILE
+
+# Wait 60 Seconds for the installation to finish
+    Start-Sleep -s 60
+	
+ECHO "Installing GIT"
+#Activating Chocolatey
+	Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+#Install GIT
+	choco install git -y
+	
+ECHO "Installing Visual Studio Build Tools and dependencies"	
+	choco install visualstudio2019buildtools -y
+	choco install dotnetcore -y
+	choco install dotnetcore-sdk -y
+	[System.Environment]::SetEnvironmentVariable('MSBuildSDKsPath', 'C:\Program Files\dotnet\sdk\3.1.402\Sdks',[System.EnvironmentVariableTarget]::Machine)
+
+ECHO "Setting Jenkins folder"
+	MKDIR C:\Jenkins
+	
+
+ECHO "Setting up PATH for Maven and Sonar-Scanner"
+    $newPath = "$SONAR_HOME\$SONAR_VERSION;$SONAR_MSBUILD_HOME;$MAVEN_HOME\$MAVEN_VERSION\bin;" + [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::Machine)
+[Environment]::SetEnvironmentVariable("PATH", $newPath, [EnvironmentVariableTarget]::Machine)
+
+ECHO "Server setup is completed"
+ECHO "Run CAT C:\cygwin64\home\Administrator\.ssh\win_key.pub to get the private key and configure Windows Agent from Jenkins"
+
+ECHO "Server needs to be restarted, it will be restarted in 30 seconds..."
